@@ -7,6 +7,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 import httpx
 from playwright.sync_api import sync_playwright
+import db
 
 # List of common User-Agents for rotation
 USER_AGENTS = [
@@ -225,7 +226,7 @@ def search_owner_on_google(playwright_context, business_name, log_callback):
         
     return owner_name, profile_link
 
-def run_google_maps_scrape(playwright_context, query, location, max_results, session, log_callback, crawl_websites=True, hunt_owners=True):
+def run_google_maps_scrape(playwright_context, query, location, max_results, session, log_callback, crawl_websites=True, hunt_owners=True, skip_duplicates=True, scrape_id=None):
     """
     Scrapes targets from Google Maps.
     """
@@ -325,6 +326,18 @@ def run_google_maps_scrape(playwright_context, query, location, max_results, ses
                 break
                 
         log_callback(f"[INFO] Scraping lead details {idx+1}/{len(place_links)}...")
+        
+        # Check duplicate prevention
+        if skip_duplicates:
+            existing_lead = db.check_duplicate_lead(link)
+            if existing_lead:
+                log_callback(f"[INFO] Skipping duplicate: '{existing_lead['Business Name']}' (already scraped). Loading from DB.")
+                session.leads.append(existing_lead)
+                leads_scraped += 1
+                session.progress = float(leads_scraped) / len(place_links)
+                # Keep it linked to current scrape run as well
+                db.save_lead(existing_lead, scrape_id)
+                continue
         
         try:
             page.goto(link, wait_until="domcontentloaded", timeout=20000)
@@ -444,6 +457,7 @@ def run_google_maps_scrape(playwright_context, query, location, max_results, ses
                 lead["Estimated Owner Name (Enriched)"] = "N/A - Public Contact Saved"
                 
             session.leads.append(lead)
+            db.save_lead(lead, scrape_id)
             leads_scraped += 1
             session.progress = float(leads_scraped) / len(place_links)
             
@@ -463,7 +477,7 @@ def run_google_maps_scrape(playwright_context, query, location, max_results, ses
             
     browser.close()
 
-def run_foodpanda_scrape(playwright_context, query, location, max_results, session, log_callback, crawl_websites=True, hunt_owners=True):
+def run_foodpanda_scrape(playwright_context, query, location, max_results, session, log_callback, crawl_websites=True, hunt_owners=True, skip_duplicates=True, scrape_id=None):
     """
     Simulates Foodpanda scraping by searching Google to bypass direct UI blocking,
     extracting listings, and parsing info.
@@ -505,6 +519,17 @@ def run_foodpanda_scrape(playwright_context, query, location, max_results, sessi
                     break
                     
             log_callback(f"[INFO] Scraping Foodpanda restaurant {idx+1}/{len(urls)}: {url}")
+            
+            # Check duplicate prevention
+            if skip_duplicates:
+                existing_lead = db.check_duplicate_lead(url)
+                if existing_lead:
+                    log_callback(f"[INFO] Skipping duplicate: '{existing_lead['Business Name']}' (already scraped). Loading from DB.")
+                    session.leads.append(existing_lead)
+                    leads_scraped += 1
+                    session.progress = float(leads_scraped) / len(urls)
+                    db.save_lead(existing_lead, scrape_id)
+                    continue
             
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=20000)
@@ -616,6 +641,7 @@ def run_foodpanda_scrape(playwright_context, query, location, max_results, sessi
                     lead["Estimated Owner Name (Enriched)"] = "N/A - Public Contact Saved"
                     
                 session.leads.append(lead)
+                db.save_lead(lead, scrape_id)
                 leads_scraped += 1
                 session.progress = float(leads_scraped) / len(urls)
                 
@@ -659,7 +685,7 @@ def save_incremental(leads, log_callback=None):
         except Exception:
             pass
 
-def run_scraping_job(query, location, max_results, platform, session, log_callback, crawl_websites=True, hunt_owners=True):
+def run_scraping_job(query, location, max_results, platform, session, log_callback, crawl_websites=True, hunt_owners=True, skip_duplicates=True):
     """
     Wrapper function to run the scraping job in a background thread.
     """
@@ -667,19 +693,22 @@ def run_scraping_job(query, location, max_results, platform, session, log_callba
     session.progress = 0.0
     session.leads = []
     
+    # Start database scrape entry
+    scrape_id = db.start_scrape_record(query, location, platform)
+    
     log_callback("[INFO] Scraping process started...")
     
     with sync_playwright() as playwright_context:
         try:
             if platform in ["Google Maps", "Both"]:
-                run_google_maps_scrape(playwright_context, query, location, max_results, session, log_callback, crawl_websites, hunt_owners)
+                run_google_maps_scrape(playwright_context, query, location, max_results, session, log_callback, crawl_websites, hunt_owners, skip_duplicates, scrape_id)
                 
             if platform == "Both":
                 log_callback("[INFO] Switching to Foodpanda Discovery...")
                 
             if platform in ["Foodpanda (Simulated)", "Both"]:
                 if not session.stop_event.is_set():
-                    run_foodpanda_scrape(playwright_context, query, location, max_results, session, log_callback, crawl_websites, hunt_owners)
+                    run_foodpanda_scrape(playwright_context, query, location, max_results, session, log_callback, crawl_websites, hunt_owners, skip_duplicates, scrape_id)
             
             # Save final results
             if session.leads:

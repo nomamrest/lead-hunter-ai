@@ -399,17 +399,39 @@ def run_google_maps_scrape(playwright_context, query, location, max_results, ses
             
             # 5. Website
             website = ""
+            
+            # Selector 1: Direct official authority check
             website_el = page.locator('a[data-item-id="authority"]').first
             if website_el.count() > 0:
                 website = website_el.get_attribute("href")
-            else:
-                # Alternate website link
-                web_els = page.locator('a[class*="CsEnBe"]').all()
-                for el in web_els:
-                    label = el.get_attribute("aria-label")
-                    if label and "Website:" in label:
-                        website = el.get_attribute("href")
-                        break
+                
+            # Selector 2: Case-insensitive labels matching 'website' or 'web'
+            if not website:
+                try:
+                    web_els = page.locator('a[aria-label*="website" i], a[aria-label*="web" i], a[aria-label*="site" i]').all()
+                    for el in web_els:
+                        href = el.get_attribute("href")
+                        if href and not any(x in href.lower() for x in ["google.com", "google.ad", "maps/"]):
+                            website = href
+                            break
+                except Exception:
+                    pass
+                    
+            # Selector 3: General check of all external links in details panel
+            if not website:
+                try:
+                    all_links = page.locator('a[href]').all()
+                    for el in all_links:
+                        href = el.get_attribute("href")
+                        if href:
+                            href_lower = href.lower()
+                            # Ignore Google internal pages, maps interfaces, and standard socials
+                            if not any(x in href_lower for x in ["google.com", "google.ad", "ggpht.com", "maps/"]):
+                                if not any(x in href_lower for x in ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "youtube.com"]):
+                                    website = href
+                                    break
+                except Exception:
+                    pass
                         
             # Create base lead dict
             lead = {

@@ -522,45 +522,75 @@ with tab3:
         st.markdown("---")
         st.markdown("### ✍️ Log Sales Call / Client Note")
         
-        lead_options = {
-            lead["Source URL"]: f"{lead.get('Business Name') or 'Unnamed Business'} ({ (lead.get('Physical Address / Location') or '')[:40] }...)"
-            for lead in all_leads
-        }
+        # Store selected client in session state so we can reset it on submit
+        if "crm_selected_url" not in st.session_state:
+            st.session_state.crm_selected_url = ""
+            
+        lead_options = {"": "--- Select a client to log call ---"}
+        for lead in all_leads:
+            lead_options[lead["Source URL"]] = f"{lead.get('Business Name') or 'Unnamed Business'} ({ (lead.get('Physical Address / Location') or '')[:40] }...)"
+            
+        keys_list = list(lead_options.keys())
+        default_idx = keys_list.index(st.session_state.crm_selected_url) if st.session_state.crm_selected_url in keys_list else 0
         
         selected_crm_url = st.selectbox(
             "Select Client to Update",
-            options=list(lead_options.keys()),
-            format_func=lambda x: lead_options[x]
+            options=keys_list,
+            index=default_idx,
+            format_func=lambda x: lead_options[x],
+            key="crm_select_widget"
         )
+        
+        # Sync widget selection to session state
+        st.session_state.crm_selected_url = selected_crm_url
         
         if selected_crm_url:
             active_lead = next(lead for lead in all_leads if lead["Source URL"] == selected_crm_url)
             
-            crm_col1, crm_col2 = st.columns(2)
+            # Render a premium glass card for the client details
+            st.markdown(f"""
+            <div class='glass-card' style='background: rgba(255, 255, 255, 0.01); border-left: 4px solid #ff8a00; padding: 15px; margin-bottom: 20px;'>
+                <div style='font-size: 1.1rem; font-weight: 600; color: #ff8a00; margin-bottom: 8px;'>📄 Active Client: {active_lead.get('Business Name') or 'Unnamed Business'}</div>
+                <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; font-size: 0.85rem; color: #a0aec0;'>
+                    <div><strong>📞 Phone:</strong> {active_lead.get("Business Phone Number") or "N/A"}</div>
+                    <div><strong>📧 Email:</strong> {active_lead.get("Public Email Address") or "N/A"}</div>
+                    <div><strong>🌐 Website:</strong> {active_lead.get("Official Website") or "N/A"}</div>
+                    <div><strong>👑 Owner:</strong> {active_lead.get("Estimated Owner Name (Enriched)") or "N/A"}</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Setup columns inside the card
+            crm_col1, crm_col2 = st.columns([1, 2])
+            
             with crm_col1:
+                st.markdown("##### ⚙️ Outreach Status")
                 current_status_val = active_lead.get("Call Status", "Pending")
                 status_options_list = ["Pending", "Called - Interested", "Called - Follow-up Needed", "Called - Not Interested", "Called - No Answer / Left Message"]
-                # Find index safely
-                index_val = 0
-                if current_status_val in status_options_list:
-                    index_val = status_options_list.index(current_status_val)
-                    
+                index_val = status_options_list.index(current_status_val) if current_status_val in status_options_list else 0
+                
                 new_status = st.selectbox(
                     "Call Outreach Status",
                     status_options_list,
-                    index=index_val
+                    index=index_val,
+                    label_visibility="collapsed"
                 )
-            with crm_col2:
-                pass
                 
-            new_notes = st.text_area(
-                "Call Notes / Client Feedback",
-                value=active_lead.get("Sales Notes", "")
-            )
-            
+            with crm_col2:
+                st.markdown("##### 📝 Call Notes & Feedback")
+                new_notes = st.text_area(
+                    "Call Notes / Client Feedback",
+                    value=active_lead.get("Sales Notes", ""),
+                    label_visibility="collapsed",
+                    height=100
+                )
+                
+            # Submit button
             if st.button("💾 Save Call Update", type="primary", use_container_width=True):
                 db.update_lead_sales_info(selected_crm_url, new_status, new_notes)
-                st.success(f"Log saved successfully for '{active_lead['Business Name']}'!")
+                st.success(f"Outreach log saved successfully for '{active_lead['Business Name']}'!")
+                # Reset selectbox to placeholder
+                st.session_state.crm_selected_url = ""
                 time.sleep(1)
                 st.rerun()
     else:

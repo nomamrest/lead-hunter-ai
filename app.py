@@ -340,6 +340,7 @@ with tab1:
         st.markdown("### 📊 Scraped Leads Viewer (Real-Time)")
         if session.leads:
             df = pd.DataFrame(session.leads)
+            df.index = df.index + 1
             st.dataframe(df[selected_fields], height=350, use_container_width=True)
         else:
             st.info("No leads scraped yet. Start a scraping job to populate data.")
@@ -380,6 +381,7 @@ with tab2:
     
     if history:
         df_history = pd.DataFrame(history)
+        df_history.index = df_history.index + 1
         # Rename columns for user-friendly display
         df_history.columns = ["ID", "Scrape Date/Time", "Search Query", "Location", "Discovery Platform", "Leads Count"]
         st.dataframe(df_history, use_container_width=True)
@@ -394,6 +396,7 @@ with tab2:
             run_leads = db.get_leads_by_scrape(selected_run_id)
             if run_leads:
                 df_run_leads = pd.DataFrame(run_leads)
+                df_run_leads.index = df_run_leads.index + 1
                 st.markdown(f"**Leads for {run_options[selected_run_id]}**")
                 st.dataframe(df_run_leads[selected_fields], use_container_width=True)
                 
@@ -469,7 +472,9 @@ with tab3:
             
         st.markdown(f"Showing **{len(df_filtered)}** leads after filtering:")
         if not df_filtered.empty:
-            st.dataframe(df_filtered[selected_fields], use_container_width=True)
+            df_display = df_filtered.reset_index(drop=True)
+            df_display.index = df_display.index + 1
+            st.dataframe(df_display[selected_fields], use_container_width=True)
         else:
             st.warning("No leads match the specified filter criteria.")
         

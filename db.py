@@ -1,74 +1,139 @@
 import os
-import sqlite3
+import sys
 import datetime
+import streamlit as st
 
-DB_FILE = "lead_hunter.db"
+# Check if we should use PostgreSQL (Supabase) or SQLite (Local fallback)
+use_postgres = False
+try:
+    if "postgres" in st.secrets and "connection_string" in st.secrets["postgres"]:
+        if st.secrets["postgres"]["connection_string"].strip():
+            use_postgres = True
+except Exception:
+    pass
+
+if use_postgres:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+else:
+    import sqlite3
 
 def get_db_connection():
     """
-    Establishes a connection to the SQLite database.
-    Returns Row-factory connection for key-value dictionary access.
+    Establishes connection to either local SQLite or remote PostgreSQL.
     """
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
+    if use_postgres:
+        conn_str = st.secrets["postgres"]["connection_string"]
+        conn = psycopg2.connect(conn_str)
+    else:
+        conn = sqlite3.connect("lead_hunter.db")
+        conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
     """
-    Initializes database tables for scrape runs history and unique leads records.
+    Initializes database tables. Handles PostgreSQL and SQLite syntax differences.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 1. Scrape Runs History table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS scrapes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT,
-        query TEXT,
-        location TEXT,
-        platform TEXT,
-        leads_count INTEGER DEFAULT 0
-    )
-    """)
-    
-    # 2. Leads database (source_url is the primary key for strict deduplication)
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS leads (
-        source_url TEXT PRIMARY KEY,
-        scrape_id INTEGER,
-        business_name TEXT,
-        category TEXT,
-        address TEXT,
-        phone TEXT,
-        email TEXT,
-        website TEXT,
-        facebook TEXT,
-        instagram TEXT,
-        linkedin TEXT,
-        twitter TEXT,
-        tiktok TEXT,
-        youtube TEXT,
-        owner_name TEXT,
-        owner_profile TEXT,
-        call_status TEXT DEFAULT 'Pending',
-        sales_notes TEXT,
-        FOREIGN KEY(scrape_id) REFERENCES scrapes(id) ON DELETE CASCADE
-    )
-    """)
-    
-    # Ensure call_status and sales_notes columns exist (migration for existing databases)
-    try:
-        cursor.execute("ALTER TABLE leads ADD COLUMN call_status TEXT DEFAULT 'Pending'")
-    except sqlite3.OperationalError:
-        pass
+    if use_postgres:
+        # PostgreSQL schema
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scrapes (
+            id SERIAL PRIMARY KEY,
+            timestamp TEXT,
+            query TEXT,
+            location TEXT,
+            platform TEXT,
+            leads_count INTEGER DEFAULT 0
+        )
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leads (
+            source_url TEXT PRIMARY KEY,
+            scrape_id INTEGER REFERENCES scrapes(id) ON DELETE CASCADE,
+            business_name TEXT,
+            category TEXT,
+            address TEXT,
+            phone TEXT,
+            email TEXT,
+            website TEXT,
+            facebook TEXT,
+            instagram TEXT,
+            linkedin TEXT,
+            twitter TEXT,
+            tiktok TEXT,
+            youtube TEXT,
+            owner_name TEXT,
+            owner_profile TEXT,
+            call_status TEXT DEFAULT 'Pending',
+            sales_notes TEXT
+        )
+        """)
+        conn.commit()
         
-    try:
-        cursor.execute("ALTER TABLE leads ADD COLUMN sales_notes TEXT")
-    except sqlite3.OperationalError:
-        pass
+        # Migrations for call_status and sales_notes if table already existed on Supabase
+        try:
+            cursor.execute("ALTER TABLE leads ADD COLUMN call_status TEXT DEFAULT 'Pending'")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            
+        try:
+            cursor.execute("ALTER TABLE leads ADD COLUMN sales_notes TEXT")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+    else:
+        # SQLite schema
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scrapes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            query TEXT,
+            location TEXT,
+            platform TEXT,
+            leads_count INTEGER DEFAULT 0
+        )
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leads (
+            source_url TEXT PRIMARY KEY,
+            scrape_id INTEGER,
+            business_name TEXT,
+            category TEXT,
+            address TEXT,
+            phone TEXT,
+            email TEXT,
+            website TEXT,
+            facebook TEXT,
+            instagram TEXT,
+            linkedin TEXT,
+            twitter TEXT,
+            tiktok TEXT,
+            youtube TEXT,
+            owner_name TEXT,
+            owner_profile TEXT,
+            call_status TEXT DEFAULT 'Pending',
+            sales_notes TEXT,
+            FOREIGN KEY(scrape_id) REFERENCES scrapes(id) ON DELETE CASCADE
+        )
+        """)
         
-    conn.commit()
+        # Migrations for SQLite
+        try:
+            cursor.execute("ALTER TABLE leads ADD COLUMN call_status TEXT DEFAULT 'Pending'")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            cursor.execute("ALTER TABLE leads ADD COLUMN sales_notes TEXT")
+        except sqlite3.OperationalError:
+            pass
+            
+        conn.commit()
+        
     conn.close()
 
 def start_scrape_record(query, location, platform):
@@ -77,13 +142,22 @@ def start_scrape_record(query, location, platform):
     Returns the scrape run record ID.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
+    cursor = conn.cursor(cursor_factory=RealDictCursor) if use_postgres else conn.cursor()
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute(
-        "INSERT INTO scrapes (timestamp, query, location, platform, leads_count) VALUES (?, ?, ?, ?, 0)",
-        (timestamp, query, location, platform)
-    )
-    scrape_id = cursor.lastrowid
+    
+    if use_postgres:
+        cursor.execute(
+            "INSERT INTO scrapes (timestamp, query, location, platform, leads_count) VALUES (%s, %s, %s, %s, 0) RETURNING id",
+            (timestamp, query, location, platform)
+        )
+        scrape_id = cursor.fetchone()["id"]
+    else:
+        cursor.execute(
+            "INSERT INTO scrapes (timestamp, query, location, platform, leads_count) VALUES (?, ?, ?, ?, 0)",
+            (timestamp, query, location, platform)
+        )
+        scrape_id = cursor.lastrowid
+        
     conn.commit()
     conn.close()
     return scrape_id
@@ -96,8 +170,10 @@ def check_duplicate_lead(source_url):
     if not source_url:
         return None
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM leads WHERE source_url = ?", (source_url,))
+    cursor = conn.cursor(cursor_factory=RealDictCursor) if use_postgres else conn.cursor()
+    p = "%s" if use_postgres else "?"
+    
+    cursor.execute(f"SELECT * FROM leads WHERE source_url = {p}", (source_url,))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -110,15 +186,16 @@ def save_lead(lead, scrape_id):
     Also updates the lead count in the corresponding scrape run entry.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
+    cursor = conn.cursor(cursor_factory=RealDictCursor) if use_postgres else conn.cursor()
+    p = "%s" if use_postgres else "?"
     
     # Map lead keys to database columns using ON CONFLICT to preserve CRM statuses
-    cursor.execute("""
+    cursor.execute(f"""
     INSERT INTO leads (
         source_url, scrape_id, business_name, category, address, phone, email, website,
         facebook, instagram, linkedin, twitter, tiktok, youtube, owner_name, owner_profile,
         call_status, sales_notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', '')
+    ) VALUES ({', '.join([p]*16)}, 'Pending', '')
     ON CONFLICT(source_url) DO UPDATE SET
         scrape_id = excluded.scrape_id,
         business_name = excluded.business_name,
@@ -155,9 +232,11 @@ def save_lead(lead, scrape_id):
     ))
     
     # Update leads count in the scrapes history table
-    cursor.execute("SELECT COUNT(*) FROM leads WHERE scrape_id = ?", (scrape_id,))
-    count = cursor.fetchone()[0]
-    cursor.execute("UPDATE scrapes SET leads_count = ? WHERE id = ?", (count, scrape_id))
+    cursor.execute(f"SELECT COUNT(*) AS total FROM leads WHERE scrape_id = {p}", (scrape_id,))
+    row = cursor.fetchone()
+    count = row["total"] if use_postgres else row[0]
+    
+    cursor.execute(f"UPDATE scrapes SET leads_count = {p} WHERE id = {p}", (count, scrape_id))
     
     conn.commit()
     conn.close()
@@ -168,10 +247,12 @@ def update_lead_sales_info(source_url, call_status, sales_notes):
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    p = "%s" if use_postgres else "?"
+    
+    cursor.execute(f"""
     UPDATE leads
-    SET call_status = ?, sales_notes = ?
-    WHERE source_url = ?
+    SET call_status = {p}, sales_notes = {p}
+    WHERE source_url = {p}
     """, (call_status, sales_notes, source_url))
     conn.commit()
     conn.close()
@@ -181,7 +262,7 @@ def get_scrape_history():
     Retrieves all scrape run log entries.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
+    cursor = conn.cursor(cursor_factory=RealDictCursor) if use_postgres else conn.cursor()
     cursor.execute("SELECT * FROM scrapes ORDER BY id DESC")
     rows = cursor.fetchall()
     conn.close()
@@ -192,12 +273,12 @@ def get_leads_by_scrape(scrape_id):
     Retrieves all leads scraped in a specific run.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM leads WHERE scrape_id = ? ORDER BY business_name ASC", (scrape_id,))
+    cursor = conn.cursor(cursor_factory=RealDictCursor) if use_postgres else conn.cursor()
+    p = "%s" if use_postgres else "?"
+    
+    cursor.execute(f"SELECT * FROM leads WHERE scrape_id = {p} ORDER BY business_name ASC", (scrape_id,))
     rows = cursor.fetchall()
     conn.close()
-    
-    # Map database row columns back to lead dictionary format
     return [db_row_to_lead_dict(r) for r in rows]
 
 def get_all_leads():
@@ -205,7 +286,7 @@ def get_all_leads():
     Retrieves all unique leads ever saved in the database.
     """
     conn = get_db_connection()
-    cursor = conn.cursor()
+    cursor = conn.cursor(cursor_factory=RealDictCursor) if use_postgres else conn.cursor()
     cursor.execute("SELECT * FROM leads ORDER BY business_name ASC")
     rows = cursor.fetchall()
     conn.close()
@@ -217,14 +298,15 @@ def delete_scrape_run(scrape_id):
     """
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM leads WHERE scrape_id = ?", (scrape_id,))
-    cursor.execute("DELETE FROM scrapes WHERE id = ?", (scrape_id,))
+    p = "%s" if use_postgres else "?"
+    cursor.execute(f"DELETE FROM leads WHERE scrape_id = {p}", (scrape_id,))
+    cursor.execute(f"DELETE FROM scrapes WHERE id = {p}", (scrape_id,))
     conn.commit()
     conn.close()
 
 def db_row_to_lead_dict(row):
     """
-    Helper function to translate an SQLite row dict back into the application's standard lead layout.
+    Helper function to translate a Row (SQLite or PostgreSQL) back into standard lead layout.
     """
     r = dict(row)
     return {

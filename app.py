@@ -205,7 +205,9 @@ all_columns = [
     "YouTube Link",
     "Estimated Owner Name (Enriched)",
     "Owner Profile Link (LinkedIn/Facebook)",
-    "Source URL"
+    "Source URL",
+    "Call Status",
+    "Sales Notes"
 ]
 selected_fields = st.sidebar.multiselect(
     "Target Fields/Columns",
@@ -437,56 +439,114 @@ with tab2:
         st.info("No scrape runs recorded in history yet.")
 
 with tab3:
-    st.markdown("### 🗄️ Master Leads Database")
+    st.markdown("### 🗄️ Master Leads Database & CRM")
     all_leads = db.get_all_leads()
     
     if all_leads:
         st.markdown(f"Total unique leads collected: **{len(all_leads)}**")
         
-        # Search filter
-        search_query = st.text_input("🔍 Search Leads Database (Name, Category, Address, Phone, Email, Owner name)", "")
+        # Filter controls row
+        filt_col1, filt_col2 = st.columns(2)
+        with filt_col1:
+            search_query = st.text_input("🔍 Search Leads Database (Name, Category, Address, Phone, Email, Owner name)", "")
+        with filt_col2:
+            status_filter = st.selectbox(
+                "Filter by Outreach Status",
+                ["All", "Pending", "Called - Interested", "Called - Follow-up Needed", "Called - Not Interested", "Called - No Answer / Left Message"]
+            )
         
         df_master = pd.DataFrame(all_leads)
         
+        # Apply filters
+        df_filtered = df_master
         if search_query:
-            # Filter rows containing query in any string column
             q = search_query.lower()
-            mask = df_master.apply(lambda row: row.astype(str).str.lower().str.contains(q).any(), axis=1)
-            df_filtered = df_master[mask]
-        else:
-            df_filtered = df_master
+            mask = df_filtered.apply(lambda row: row.astype(str).str.lower().str.contains(q).any(), axis=1)
+            df_filtered = df_filtered[mask]
+            
+        if status_filter != "All":
+            df_filtered = df_filtered[df_filtered["Call Status"] == status_filter]
             
         st.markdown(f"Showing **{len(df_filtered)}** leads after filtering:")
-        st.dataframe(df_filtered[selected_fields], use_container_width=True)
+        if not df_filtered.empty:
+            st.dataframe(df_filtered[selected_fields], use_container_width=True)
+        else:
+            st.warning("No leads match the specified filter criteria.")
         
         # Export Master List
         master_col1, master_col2, master_col3 = st.columns([1, 1, 2])
+        if not df_filtered.empty:
+            df_master_export = df_filtered[selected_fields]
+            csv_master_data = df_master_export.to_csv(index=False).encode('utf-8')
+            with master_col1:
+                st.download_button(
+                    label="Download Database as CSV",
+                    data=csv_master_data,
+                    file_name="master_leads_export.csv",
+                    mime="text/csv",
+                    key="dl_master_csv",
+                    use_container_width=True
+                )
+                
+            excel_master_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_master_buffer, engine='openpyxl') as writer:
+                df_master_export.to_excel(writer, index=False, sheet_name='Master Leads')
+            excel_master_data = excel_master_buffer.getvalue()
+            with master_col2:
+                st.download_button(
+                    label="Download Database as Excel",
+                    data=excel_master_data,
+                    file_name="master_leads_export.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_master_xlsx",
+                    use_container_width=True
+                )
+                
+        # CRM Logging form
+        st.markdown("---")
+        st.markdown("### ✍️ Log Sales Call / Client Note")
         
-        df_master_export = df_filtered[selected_fields]
-        csv_master_data = df_master_export.to_csv(index=False).encode('utf-8')
-        with master_col1:
-            st.download_button(
-                label="Download Database as CSV",
-                data=csv_master_data,
-                file_name="master_leads_export.csv",
-                mime="text/csv",
-                key="dl_master_csv",
-                use_container_width=True
+        lead_options = {
+            lead["Source URL"]: f"{lead.get('Business Name') or 'Unnamed Business'} ({ (lead.get('Physical Address / Location') or '')[:40] }...)"
+            for lead in all_leads
+        }
+        
+        selected_crm_url = st.selectbox(
+            "Select Client to Update",
+            options=list(lead_options.keys()),
+            format_func=lambda x: lead_options[x]
+        )
+        
+        if selected_crm_url:
+            active_lead = next(lead for lead in all_leads if lead["Source URL"] == selected_crm_url)
+            
+            crm_col1, crm_col2 = st.columns(2)
+            with crm_col1:
+                current_status_val = active_lead.get("Call Status", "Pending")
+                status_options_list = ["Pending", "Called - Interested", "Called - Follow-up Needed", "Called - Not Interested", "Called - No Answer / Left Message"]
+                # Find index safely
+                index_val = 0
+                if current_status_val in status_options_list:
+                    index_val = status_options_list.index(current_status_val)
+                    
+                new_status = st.selectbox(
+                    "Call Outreach Status",
+                    status_options_list,
+                    index=index_val
+                )
+            with crm_col2:
+                pass
+                
+            new_notes = st.text_area(
+                "Call Notes / Client Feedback",
+                value=active_lead.get("Sales Notes", "")
             )
             
-        excel_master_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_master_buffer, engine='openpyxl') as writer:
-            df_master_export.to_excel(writer, index=False, sheet_name='Master Leads')
-        excel_master_data = excel_master_buffer.getvalue()
-        with master_col2:
-            st.download_button(
-                label="Download Database as Excel",
-                data=excel_master_data,
-                file_name="master_leads_export.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_master_xlsx",
-                use_container_width=True
-            )
+            if st.button("💾 Save Call Update", type="primary", use_container_width=True):
+                db.update_lead_sales_info(selected_crm_url, new_status, new_notes)
+                st.success(f"Log saved successfully for '{active_lead['Business Name']}'!")
+                time.sleep(1)
+                st.rerun()
     else:
         st.info("The master database is currently empty. Run a scrape job first.")
 

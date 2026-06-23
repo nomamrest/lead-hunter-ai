@@ -51,9 +51,23 @@ def init_db():
         youtube TEXT,
         owner_name TEXT,
         owner_profile TEXT,
+        call_status TEXT DEFAULT 'Pending',
+        sales_notes TEXT,
         FOREIGN KEY(scrape_id) REFERENCES scrapes(id) ON DELETE CASCADE
     )
     """)
+    
+    # Ensure call_status and sales_notes columns exist (migration for existing databases)
+    try:
+        cursor.execute("ALTER TABLE leads ADD COLUMN call_status TEXT DEFAULT 'Pending'")
+    except sqlite3.OperationalError:
+        pass
+        
+    try:
+        cursor.execute("ALTER TABLE leads ADD COLUMN sales_notes TEXT")
+    except sqlite3.OperationalError:
+        pass
+        
     conn.commit()
     conn.close()
 
@@ -87,24 +101,40 @@ def check_duplicate_lead(source_url):
     row = cursor.fetchone()
     conn.close()
     if row:
-        # Convert sqlite3.Row to standard dictionary
-        return dict(row)
+        return db_row_to_lead_dict(row)
     return None
 
 def save_lead(lead, scrape_id):
     """
-    Saves a scraped lead into the database (insert or replace).
+    Saves a scraped lead into the database, updating details but preserving salesperson call logs.
     Also updates the lead count in the corresponding scrape run entry.
     """
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Map lead keys to database columns
+    # Map lead keys to database columns using ON CONFLICT to preserve CRM statuses
     cursor.execute("""
-    INSERT OR REPLACE INTO leads (
+    INSERT INTO leads (
         source_url, scrape_id, business_name, category, address, phone, email, website,
-        facebook, instagram, linkedin, twitter, tiktok, youtube, owner_name, owner_profile
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        facebook, instagram, linkedin, twitter, tiktok, youtube, owner_name, owner_profile,
+        call_status, sales_notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', '')
+    ON CONFLICT(source_url) DO UPDATE SET
+        scrape_id = excluded.scrape_id,
+        business_name = excluded.business_name,
+        category = excluded.category,
+        address = excluded.address,
+        phone = excluded.phone,
+        email = excluded.email,
+        website = excluded.website,
+        facebook = excluded.facebook,
+        instagram = excluded.instagram,
+        linkedin = excluded.linkedin,
+        twitter = excluded.twitter,
+        tiktok = excluded.tiktok,
+        youtube = excluded.youtube,
+        owner_name = excluded.owner_name,
+        owner_profile = excluded.owner_profile
     """, (
         lead.get("Source URL", ""),
         scrape_id,
@@ -129,6 +159,20 @@ def save_lead(lead, scrape_id):
     count = cursor.fetchone()[0]
     cursor.execute("UPDATE scrapes SET leads_count = ? WHERE id = ?", (count, scrape_id))
     
+    conn.commit()
+    conn.close()
+
+def update_lead_sales_info(source_url, call_status, sales_notes):
+    """
+    Updates the salesperson CRM details (Call Status, Notes) for a specific client.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    UPDATE leads
+    SET call_status = ?, sales_notes = ?
+    WHERE source_url = ?
+    """, (call_status, sales_notes, source_url))
     conn.commit()
     conn.close()
 
@@ -198,7 +242,9 @@ def db_row_to_lead_dict(row):
         "YouTube Link": r.get("youtube", ""),
         "Estimated Owner Name (Enriched)": r.get("owner_name", ""),
         "Owner Profile Link (LinkedIn/Facebook)": r.get("owner_profile", ""),
-        "Source URL": r.get("source_url", "")
+        "Source URL": r.get("source_url", ""),
+        "Call Status": r.get("call_status", "Pending"),
+        "Sales Notes": r.get("sales_notes", "")
     }
 
 # Run initialization upon import

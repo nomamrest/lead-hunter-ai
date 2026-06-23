@@ -1,0 +1,18 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local datasets / Scraped leads
+food_leads*.csv
+*.xlsx
+
+# Logs
+*.log
+
+# Streamlit config / credentials
+.streamlit/
+
+# Installers
+python_installer.exe

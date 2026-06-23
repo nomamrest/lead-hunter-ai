@@ -5,6 +5,15 @@ import threading
 import pandas as pd
 import streamlit as st
 
+# Auto-install Playwright browser binaries if running in a cloud environment (e.g. Streamlit Cloud)
+if os.environ.get("STREAMLIT_SERVER_PORT") or os.environ.get("SPACES_AUTHOR_NAME"):
+    try:
+        import subprocess
+        # Run playwright installation using the current Python environment
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        pass
+
 # Ensure stdout uses UTF-8 to prevent charmap/UnicodeEncodeError on Windows console
 if sys.platform.startswith("win"):
     try:

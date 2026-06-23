@@ -5,14 +5,20 @@ import threading
 import pandas as pd
 import streamlit as st
 
-# Auto-install Playwright browser binaries if running in a cloud environment (e.g. Streamlit Cloud)
-if os.environ.get("STREAMLIT_SERVER_PORT") or os.environ.get("SPACES_AUTHOR_NAME"):
+# Auto-install Playwright browser binaries if running in a Linux cloud environment (e.g. Streamlit Cloud)
+playwright_flag = "/tmp/playwright_installed"
+if sys.platform.startswith("linux") and not os.path.exists(playwright_flag):
     try:
         import subprocess
+        print("[INFO] Cloud environment detected. Installing Playwright Chromium browser...")
         # Run playwright installation using the current Python environment
         subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        # Create flag file to prevent repeating on every script rerun
+        with open(playwright_flag, "w") as f:
+            f.write("done")
+        print("[INFO] Playwright Chromium browser installed successfully.")
     except Exception as e:
-        pass
+        print(f"[ERROR] Playwright auto-installation failed: {e}")
 
 # Ensure stdout uses UTF-8 to prevent charmap/UnicodeEncodeError on Windows console
 if sys.platform.startswith("win"):

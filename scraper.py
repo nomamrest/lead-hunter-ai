@@ -427,7 +427,9 @@ def run_google_maps_scrape(playwright_context, query, location, max_results, ses
                 "YouTube Link": "",
                 "Estimated Owner Name (Enriched)": "",
                 "Owner Profile Link (LinkedIn/Facebook)": "",
-                "Source URL": link
+                "Source URL": link,
+                "Call Status": "Pending",
+                "Sales Notes": ""
             }
             
             # 6. Autonomous Enrichment
@@ -586,7 +588,9 @@ def run_foodpanda_scrape(playwright_context, query, location, max_results, sessi
                     "YouTube Link": "",
                     "Estimated Owner Name (Enriched)": "",
                     "Owner Profile Link (LinkedIn/Facebook)": "",
-                    "Source URL": url
+                    "Source URL": url,
+                    "Call Status": "Pending",
+                    "Sales Notes": ""
                 }
                 
                 # Enrichments

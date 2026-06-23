@@ -474,7 +474,7 @@ with tab3:
             st.warning("No leads match the specified filter criteria.")
         
         # Export Master List
-        master_col1, master_col2, master_col3 = st.columns([1, 1, 2])
+        master_col1, master_col2, master_col3 = st.columns([1, 1, 1])
         if not df_filtered.empty:
             df_master_export = df_filtered[selected_fields]
             csv_master_data = df_master_export.to_csv(index=False).encode('utf-8')
@@ -501,6 +501,22 @@ with tab3:
                     key="dl_master_xlsx",
                     use_container_width=True
                 )
+                
+            # SQLite DB file download
+            try:
+                with open("lead_hunter.db", "rb") as db_file:
+                    db_bytes = db_file.read()
+                with master_col3:
+                    st.download_button(
+                        label="Download Raw DB File (.db)",
+                        data=db_bytes,
+                        file_name="lead_hunter.db",
+                        mime="application/x-sqlite3",
+                        key="dl_master_db",
+                        use_container_width=True
+                    )
+            except Exception:
+                pass
                 
         # CRM Logging form
         st.markdown("---")
